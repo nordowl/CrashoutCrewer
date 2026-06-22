@@ -26,7 +26,8 @@ It extends everything that was built for 4 players so the game keeps working wit
 1. Download **BepInEx 5 (x64)** from the [releases page](https://github.com/BepInEx/BepInEx/releases),
    extract it into the game folder (next to `CrashoutCrew.exe`), and run the game once to generate the folders.
 
-2. Copy the `CrashoutCrew6` folder (containing `CrashoutCrew6.dll`) into:
+2. Download the latest release of this mod from the releases page
+   and extract the contents (the `CrashoutCrew6` folder containing `CrashoutCrew6.dll`) into:
    ```…\steamapps\common\CrashoutCrew\BepInEx\plugins\```
    so the file ends up at `BepInEx\plugins\CrashoutCrew6\CrashoutCrew6.dll`.
 
