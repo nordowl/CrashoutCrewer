@@ -1,3 +1,5 @@
+<img width="1149" height="752" alt="grafik" src="https://github.com/user-attachments/assets/23602d2b-1303-4b50-9a67-756b8ab35adc" />
+
 > [!CAUTION]
 > This mod has not yet been tested with real players. But _should_ work fine.
 > Will update README once I can confirm everything works.
