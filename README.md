@@ -37,4 +37,10 @@ To uninstall, just delete the `CrashoutCrew6` folder from `BepInEx\plugins`.
 
 ---
 
+## Development / Build from source
+
+Ran out of Claude usage so this will follow soon (if I dont forget lol)
+
+---
+
 yes, this is vibecoded
