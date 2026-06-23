@@ -25,6 +25,21 @@ namespace CrashoutCrew6
         private static readonly Vector3 RowOffsetHighX = new Vector3(0f, 0f, -3.2f);  // column near x=-10.8 (row A)
         private static readonly Vector3 RowOffsetLowX = new Vector3(2f, 0f, -1f);     // column near x=-17 (row B)
 
+        // The 4 vanilla parking-spot positions (by lobbyPlayerIndex). Fixed reference so every peer
+        // computes the same layout regardless of the (networked) live kart positions.
+        private static readonly Vector3[] VanillaSpots =
+        {
+            new Vector3(-10.83f, 0f, 14.94f), // 0 — row A front
+            new Vector3(-10.78f, 0f, 17.96f), // 1 — row A back
+            new Vector3(-17.05f, 0f, 12.64f), // 2 — row B front
+            new Vector3(-16.73f, 0f, 15.91f), // 3 — row B back
+        };
+        private const float ColAX = -10.83f;
+        private const float ColBX = -17.05f;
+
+        private static Vector3 RowOffset(float x) =>
+            Mathf.Abs(x - ColAX) <= Mathf.Abs(x - ColBX) ? RowOffsetHighX : RowOffsetLowX;
+
         private static GameObject _template;
         private static bool _sceneHookInstalled;
 
@@ -129,32 +144,35 @@ namespace CrashoutCrew6
 
                 CameraTargetsBuilt = false; // rebuild camera targets for this fresh lobby
 
-                var rowOffset = BuildRowOffset(originals);
+                // Final positions are deterministic (fixed bases + fixed per-row offsets), so every
+                // peer agrees without reading the live, networked kart positions.
                 var bases = new[] { Spot5Base, Spot6Base };
                 var newPositions = new List<Vector3>();
                 for (int k = 0; have + k < target; k++)
                 {
-                    Vector3 b = k < bases.Length ? bases[k] : source.transform.position + new Vector3(0, 0, 3.25f * (k + 1));
-                    newPositions.Add(b + rowOffset(b.x));
-                }
-
-                bool alreadyApplied = decalsRoot != null && decalsRoot.transform.Find("CC6_bays") != null;
-                if (!alreadyApplied)
-                {
-                    // capture each column's complete-bay decal template BEFORE moving anything
-                    var templates = CaptureBayTemplates(originals, decalsRoot);
-                    // shift each existing row + its bays by that row's offset
-                    ShiftOriginals(originals, decalsRoot, rowOffset);
-                    // build a full bay outline for each new spot
-                    CloneNewBays(decalsRoot, newPositions, templates);
+                    Vector3 b = k < bases.Length ? bases[k] : VanillaSpots[k % VanillaSpots.Length];
+                    newPositions.Add(b + RowOffset(b.x));
                 }
 
                 // make sure the kart prefab is registered (server spawns it, clients receive it)
                 EnsurePrefab(source);
 
-                // karts: server only (networked, replicate to clients)
+                // Bays are LOCAL scene art — every peer draws its own (deterministic). The originals'
+                // bay decals are shifted, and a full bay is added for each new spot.
+                bool alreadyApplied = decalsRoot != null && decalsRoot.transform.Find("CC6_bays") != null;
+                if (!alreadyApplied)
+                {
+                    var templates = CaptureBayTemplates(decalsRoot); // from vanilla decals + fixed front refs
+                    ShiftDecals(decalsRoot);
+                    CloneNewBays(decalsRoot, newPositions, templates);
+                }
+
+                // Kart positions are NETWORKED (server-authoritative). Only the server moves them; the
+                // clients receive them over the wire. Doing it on clients too would double-shift.
                 if (NetworkServer.active && mgr != null)
                 {
+                    ServerPositionOriginals(originals);
+
                     var spots = ServerAvailableField.GetValue(mgr) as List<LobbyPlayer>;
                     if (spots == null) { Log.Error("LobbyExpander: _serverAvailablePlayers not found."); return; }
                     if (spots.Count >= target) { Log.Debug("LobbyExpander: karts already added."); return; }
@@ -184,35 +202,27 @@ namespace CrashoutCrew6
             public List<(Transform decal, Vector3 rel)> parts = new List<(Transform, Vector3)>();
         }
 
-        /// <summary>Captures, per column, the decals making up a complete bay relative to that column's front spot.</summary>
-        private static List<BayTemplate> CaptureBayTemplates(List<LobbyPlayer> originals, GameObject decalsRoot)
+        /// <summary>Captures each column's complete-bay decals relative to that column's fixed vanilla
+        /// front-spot reference. Reads the decals while they're still at their vanilla scene positions.</summary>
+        private static List<BayTemplate> CaptureBayTemplates(GameObject decalsRoot)
         {
             var templates = new List<BayTemplate>();
             if (decalsRoot == null) return templates;
 
-            // group originals into columns by X, find each column's front (lowest-Z) spot
-            var columns = new Dictionary<int, LobbyPlayer>();
-            foreach (var s in originals)
-            {
-                int key = Mathf.RoundToInt(s.transform.position.x / 3f);
-                if (!columns.TryGetValue(key, out var front) || s.transform.position.z < front.transform.position.z)
-                    columns[key] = s;
-            }
-
             var stripes = new List<Transform>();
             foreach (var t in decalsRoot.GetComponentsInChildren<Transform>(true))
-                if (t != decalsRoot.transform && t.name.Contains("stripe")) stripes.Add(t);
+                if (t != decalsRoot.transform && t.name.Contains("stripe") && !t.name.StartsWith("CC6_"))
+                    stripes.Add(t);
 
-            foreach (var kv in columns)
+            // front spot of each column = the lower-Z vanilla spot (index 0 = row A, index 2 = row B)
+            foreach (var front in new[] { VanillaSpots[0], VanillaSpots[2] })
             {
-                var frontSpot = kv.Value;
-                var tmpl = new BayTemplate { columnX = frontSpot.transform.position.x };
-                var sp = frontSpot.transform.position;
+                var tmpl = new BayTemplate { columnX = front.x };
                 foreach (var d in stripes)
                 {
                     var dp = d.position;
-                    if (Mathf.Abs(dp.x - sp.x) < 2.6f && Mathf.Abs(dp.z - sp.z) < 2.6f)
-                        tmpl.parts.Add((d, dp - sp));
+                    if (Mathf.Abs(dp.x - front.x) < 2.6f && Mathf.Abs(dp.z - front.z) < 2.6f)
+                        tmpl.parts.Add((d, dp - front));
                 }
                 templates.Add(tmpl);
                 Log.Debug($"LobbyExpander: bay template for column x={tmpl.columnX:0.00} has {tmpl.parts.Count} decal(s).");
@@ -220,55 +230,36 @@ namespace CrashoutCrew6
             return templates;
         }
 
-        /// <summary>Builds a function mapping an X coordinate to its row's configured offset.</summary>
-        private static System.Func<float, Vector3> BuildRowOffset(List<LobbyPlayer> originals)
+        /// <summary>Shifts the existing painted bay decals by their row offset. Local on every peer.</summary>
+        private static void ShiftDecals(GameObject decalsRoot)
         {
-            // column centroids by X
-            var sums = new Dictionary<int, (float sumX, int n)>();
-            foreach (var s in originals)
+            if (decalsRoot == null) return;
+            foreach (var t in decalsRoot.GetComponentsInChildren<Transform>(true))
             {
-                int key = Mathf.RoundToInt(s.transform.position.x / 3f);
-                sums.TryGetValue(key, out var ex);
-                sums[key] = (ex.sumX + s.transform.position.x, ex.n + 1);
+                if (t == decalsRoot.transform || !t.name.Contains("stripe")) continue;
+                if (t.name.StartsWith("CC6_")) continue;   // our own clones
+                var p = t.position;
+                if (p.z < 8f || p.z > 24f) continue;       // parking-area decals only
+                t.position += RowOffset(p.x);
             }
-            var centroids = new List<float>();
-            foreach (var kv in sums) centroids.Add(kv.Value.sumX / kv.Value.n);
-            centroids.Sort(); // ascending: [low X (row B), high X (row A)]
-
-            var offA = RowOffsetHighX; // column near x=-10.8
-            var offB = RowOffsetLowX;  // column near x=-17
-
-            var map = new List<(float x, Vector3 off)>();
-            if (centroids.Count >= 1) map.Add((centroids[0], offB));                       // lowest X = row B
-            if (centroids.Count >= 2) map.Add((centroids[centroids.Count - 1], offA));      // highest X = row A
-            foreach (var m in map) Log.Debug($"LobbyExpander: row centroidX={m.x:0.00} offset={Fmt(m.off)}");
-
-            return (x) =>
-            {
-                Vector3 best = Vector3.zero; float bd = float.MaxValue;
-                foreach (var m in map) { float d = Mathf.Abs(m.x - x); if (d < bd) { bd = d; best = m.off; } }
-                return best;
-            };
+            Log.Info("LobbyExpander: shifted existing bay decals.");
         }
 
-        /// <summary>Moves each existing lobby row and its painted bays by that row's offset.</summary>
-        private static void ShiftOriginals(List<LobbyPlayer> originals, GameObject decalsRoot, System.Func<float, Vector3> rowOffset)
+        /// <summary>Server-only: positions the existing lobby karts to their final (shifted) spots.
+        /// These are networked, so clients receive them — clients must NOT do this themselves.</summary>
+        private static void ServerPositionOriginals(List<LobbyPlayer> originals)
         {
             foreach (var lp in originals)
-                if (lp != null) lp.transform.position += rowOffset(lp.transform.position.x);
-
-            if (decalsRoot != null)
             {
-                foreach (var t in decalsRoot.GetComponentsInChildren<Transform>(true))
-                {
-                    if (t == decalsRoot.transform || !t.name.Contains("stripe")) continue;
-                    var p = t.position;
-                    if (p.z < 8f || p.z > 24f) continue;       // parking-area decals only
-                    if (t.name.StartsWith("CC6_")) continue;   // our own clones (shouldn't exist yet)
-                    t.position += rowOffset(p.x);
-                }
+                if (lp == null) continue;
+                int idx = lp.lobbyPlayerIndex;
+                if (idx < 0 || idx >= VanillaSpots.Length) continue;
+                Vector3 pos = VanillaSpots[idx] + RowOffset(VanillaSpots[idx].x);
+                lp.transform.position = pos;
+                var rb = lp.GetComponent<Rigidbody>();
+                if (rb != null) { rb.position = pos; rb.velocity = Vector3.zero; }
             }
-            Log.Info("LobbyExpander: applied per-row offsets to existing lobby.");
+            Log.Info("LobbyExpander: positioned original lobby karts (server).");
         }
 
         /// <summary>Clones a complete bay outline centered on each new spot, using the nearest column template.</summary>
